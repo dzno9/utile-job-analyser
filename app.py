@@ -362,7 +362,7 @@ def render_report(
 
     with tabs[3]:
         if cover_letter_generated and report.recommendation != Recommendation.DO_NOT_APPLY:
-            cleaned_cover_letter = clean_text(report.cover_letter.draft_markdown)
+            cleaned_cover_letter = clean_text(report.cover_letter.draft_markdown, preserve_paragraphs=True)
             st.markdown(cleaned_cover_letter)
             render_copy_button(cleaned_cover_letter, key="cover_letter_copy")
             with st.expander("Emphasis strategy"):
