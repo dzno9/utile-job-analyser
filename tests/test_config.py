@@ -5,6 +5,10 @@ from config import load_settings
 
 
 class TestConfig(unittest.TestCase):
+    def setUp(self) -> None:
+        for key in ("LLM_PROVIDER", "LLM_MODEL", "ANTHROPIC_API_KEY", "OPENAI_API_KEY"):
+            os.environ.pop(key, None)
+
     def tearDown(self) -> None:
         for key in ("LLM_PROVIDER", "LLM_MODEL", "ANTHROPIC_API_KEY", "OPENAI_API_KEY"):
             os.environ.pop(key, None)

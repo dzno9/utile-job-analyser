@@ -34,7 +34,8 @@ STEP_MAP = {
     "Visa Check": "Checking visa requirements",
     "Cover Letter": "Drafting your cover letter",
     "CV Tweaks": "Suggesting CV improvements",
-    "Application Materials": "Drafting your cover letter and CV improvements",
+    "Application Materials": "Generating your materials",
+    "Assemble Report": "Finalizing your report",
 }
 
 

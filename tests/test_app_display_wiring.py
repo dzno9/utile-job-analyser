@@ -30,23 +30,13 @@ class _DummyContext:
         return False
 
 
-class _FakeStatusHandle:
-    def __init__(self) -> None:
-        self.updates: list[dict] = []
-
-    def update(self, **kwargs) -> None:  # noqa: ANN003
-        self.updates.append(kwargs)
-
-
 class _FakePlaceholder:
     def __init__(self) -> None:
-        self.labels: list[str] = []
-        self.handle = _FakeStatusHandle()
+        self.markdowns: list[str] = []
 
-    def status(self, label: str, state: str, expanded: bool):  # noqa: ANN001
-        self.labels.append(label)
-        self.handle.updates.append({"state": state, "expanded": expanded})
-        return self.handle
+    def markdown(self, text: str, **kwargs) -> None:  # noqa: ANN003
+        del kwargs
+        self.markdowns.append(text)
 
 
 class _FakeStreamlit:
@@ -178,9 +168,13 @@ class TestAppDisplayWiring(unittest.TestCase):
                 show_recommendation_banner=True,
             )
 
-        frame = fake_st.dataframes[0]
-        self.assertEqual(frame.iloc[0]["Evidence"], "Dika Satria")
-        self.assertEqual(frame.iloc[0]["Rationale"], "Built analytics pipelines with strong ownership")
+        scorecard_html = "\n".join(fake_st.markdowns)
+        # Evidence should be cleaned: no [fallback], no phone number, no email
+        self.assertNotIn("[fallback]", scorecard_html)
+        self.assertNotIn("+44-7824-711960", scorecard_html)
+        self.assertNotIn("dzno9a@gmail", scorecard_html)
+        # Cleaned rationale should appear
+        self.assertIn("Built analytics pipelines with strong ownership", scorecard_html)
         self.assertIn("Data Quality Notes", fake_st.expander_labels)
         self.assertIn(
             "Job posting scraped with 75% confidence - some details may be approximate",
@@ -192,17 +186,49 @@ class TestAppDisplayWiring(unittest.TestCase):
 
     def test_update_progress_view_maps_loading_step(self) -> None:
         placeholder = _FakePlaceholder()
-        stage_views = {}
+        progress_state = {
+            "completed_steps": set(),
+            "active_step": app.LOADING_STEP_ORDER[0],
+        }
         event = StageEvent(
-            stage_key="scrape",
-            stage_name="Job Scrape",
+            stage_key="gap",
+            stage_name="Gap Analysis",
             status="running",
-            detail="[fallback] Scraping job URL",
+            detail="[fallback] Comparing CV to role",
         )
 
-        app._update_progress_view(event, placeholder, stage_views)
+        app._update_progress_view(event, placeholder, progress_state)
 
-        self.assertIn("Reading job requirements: Scraping job URL", placeholder.labels)
+        self.assertEqual(progress_state["active_step"], "Gap Analysis")
+        self.assertIn("Job Scrape", progress_state["completed_steps"])
+        self.assertIn("CV Parse", progress_state["completed_steps"])
+        self.assertIn("Comparing your fit", placeholder.markdowns[-1])
+
+    def test_update_progress_view_keeps_company_step_active_until_visa_finishes(self) -> None:
+        placeholder = _FakePlaceholder()
+        progress_state = {
+            "completed_steps": {"Job Scrape", "CV Parse", "Gap Analysis"},
+            "active_step": "Company Brief",
+        }
+        company_complete = StageEvent(
+            stage_key="company",
+            stage_name="Company Brief",
+            status="complete",
+            detail="Research complete",
+        )
+        visa_complete = StageEvent(
+            stage_key="visa",
+            stage_name="Visa Check",
+            status="complete",
+            detail="Likely",
+        )
+
+        app._update_progress_view(company_complete, placeholder, progress_state)
+        self.assertNotIn("Company Brief", progress_state["completed_steps"])
+
+        app._update_progress_view(visa_complete, placeholder, progress_state)
+        self.assertIn("Company Brief", progress_state["completed_steps"])
+        self.assertEqual(progress_state["active_step"], "Application Materials")
 
 
 if __name__ == "__main__":

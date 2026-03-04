@@ -56,6 +56,7 @@ class TestDisplayUtils(unittest.TestCase):
 
     def test_map_loading_step_known_and_unknown(self) -> None:
         self.assertEqual(map_loading_step("Visa Check"), "Checking visa requirements")
+        self.assertEqual(map_loading_step("Application Materials"), "Generating your materials")
         self.assertEqual(map_loading_step("Unmapped"), "Unmapped")
 
 

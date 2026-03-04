@@ -99,7 +99,10 @@ tests/                     # Unit tests for all modules
 
 ## Roadmap
 
-- [ ] UI redesign: score visualization, card-based layouts, loading states
+- [x] UI redesign: score ring visualization, card-based scorecard, inline loading progress
+- [ ] Recommendation action cards with next-step guidance
+- [ ] Smart input enhancements (URL auto-detect, recent analyses)
+- [ ] Analysis history and comparison
 - [ ] Export analysis as formatted report
 - [ ] Multi-country visa check support
 - [ ] Hosted deployment

@@ -7,7 +7,6 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-import pandas as pd
 import streamlit as st
 import streamlit.components.v1 as components
 
@@ -26,7 +25,23 @@ from stages.application_materials_generator import build_materials_generator
 from stages.ui_orchestrator import PipelineOrchestrator, PipelineRequest, StageEvent
 
 VIEW_INPUT = "input"
+VIEW_LOADING = "loading"
 VIEW_RESULTS = "results"
+LOADING_STEP_ORDER = [
+    "Job Scrape",
+    "CV Parse",
+    "Gap Analysis",
+    "Company Brief",
+    "Application Materials",
+]
+LOADING_STEP_BY_STAGE_KEY = {
+    "scrape": "Job Scrape",
+    "gap": "Gap Analysis",
+    "company": "Company Brief",
+    "visa": "Company Brief",
+    "materials": "Application Materials",
+    "assemble": "Application Materials",
+}
 
 
 st.set_page_config(page_title="Utile Job Analyzer", layout="wide")
@@ -37,7 +52,9 @@ def main() -> None:
     _init_state()
     _render_sidebar()
 
-    if (
+    if st.session_state["current_view"] == VIEW_LOADING:
+        _render_loading_page()
+    elif (
         st.session_state["current_view"] == VIEW_RESULTS
         and st.session_state.get("analysis_result") is not None
     ):
@@ -169,9 +186,21 @@ def _render_input_page() -> None:
         if st.session_state.get("cv_parse_failed")
         else ""
     )
+    st.session_state["pending_manual_job_text"] = manual_job_posting_text
+    st.session_state["pending_manual_cv_text"] = manual_cv_text
+    st.session_state["current_view"] = VIEW_LOADING
+    st.rerun()
+
+
+def _render_loading_page() -> None:
+    if not st.session_state.get("job_url") or not st.session_state.get("cv_bytes"):
+        st.session_state["current_view"] = VIEW_INPUT
+        st.rerun()
+        return
+
     _execute_pipeline(
-        manual_job_posting_text=manual_job_posting_text,
-        manual_cv_text=manual_cv_text,
+        manual_job_posting_text=st.session_state.get("pending_manual_job_text", ""),
+        manual_cv_text=st.session_state.get("pending_manual_cv_text", ""),
     )
 
 
@@ -214,13 +243,17 @@ def _execute_pipeline(*, manual_job_posting_text: str = "", manual_cv_text: str 
     os.environ["LLM_PROVIDER"] = st.session_state.get("llm_provider", "anthropic")
     os.environ["LLM_MODEL"] = st.session_state.get("llm_model", "claude-sonnet-4-20250514")
 
-    progress_placeholder = st.container()
-    stage_views: dict[str, Any] = {}
+    progress_placeholder = st.empty()
+    progress_state: dict[str, Any] = {
+        "completed_steps": set(),
+        "active_step": LOADING_STEP_ORDER[0],
+    }
+    _render_loading_progress(progress_placeholder, progress_state)
     events: list[StageEvent] = []
 
     def on_event(event: StageEvent) -> None:
         events.append(event)
-        _update_progress_view(event, progress_placeholder, stage_views)
+        _update_progress_view(event, progress_placeholder, progress_state)
 
     with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as temp_cv:
         temp_cv.write(st.session_state["cv_bytes"])
@@ -243,12 +276,16 @@ def _execute_pipeline(*, manual_job_posting_text: str = "", manual_cv_text: str 
     if result.needs_manual_posting_text:
         st.session_state["events"] = events
         st.session_state["scrape_failed"] = True
+        st.session_state["pending_manual_job_text"] = ""
+        st.session_state["pending_manual_cv_text"] = ""
         st.session_state["current_view"] = VIEW_INPUT
         st.rerun()
 
     if result.needs_manual_cv_text:
         st.session_state["events"] = events
         st.session_state["cv_parse_failed"] = True
+        st.session_state["pending_manual_job_text"] = ""
+        st.session_state["pending_manual_cv_text"] = ""
         st.session_state["current_view"] = VIEW_INPUT
         st.rerun()
 
@@ -256,6 +293,8 @@ def _execute_pipeline(*, manual_job_posting_text: str = "", manual_cv_text: str 
     st.session_state["analysis_result"] = result
     st.session_state["scrape_failed"] = False
     st.session_state["cv_parse_failed"] = False
+    st.session_state["pending_manual_job_text"] = ""
+    st.session_state["pending_manual_cv_text"] = ""
     st.session_state["current_view"] = VIEW_RESULTS
     st.rerun()
 
@@ -309,16 +348,7 @@ def render_report(
             f"{report.scorecard.total_score:.0f}/100",
             score_style["label"],
         )
-        rows = [
-            {
-                "Requirement": row.requirement_from_job_post,
-                "Match": row.match_strength.value,
-                "Evidence": clean_text(row.matching_experience),
-                "Rationale": clean_text(row.rationale),
-            }
-            for row in report.scorecard.rows
-        ]
-        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+        _render_scorecard_cards(report.scorecard.rows)
 
     with tabs[1]:
         st.markdown(report.company_brief.summary)
@@ -368,6 +398,43 @@ def render_report(
         with st.expander("Data Quality Notes", expanded=False):
             for warning in warnings:
                 st.warning(humanize_warning(warning))
+
+
+def _render_scorecard_cards(rows: list) -> None:
+    match_styles = {
+        "strong": ("#059669", "#ECFDF5", "Strong"),
+        "partial": ("#d97706", "#FFFBEB", "Partial"),
+        "gap": ("#dc2626", "#FEF2F2", "Gap"),
+    }
+    cards: list[str] = []
+    for row in rows:
+        color, bg, label = match_styles.get(
+            row.match_strength.value, ("#6b7280", "#f3f4f6", "\u2014")
+        )
+        req = html.escape(clean_text(row.requirement_from_job_post))
+        evidence_raw = clean_text(row.matching_experience or "")
+        evidence = html.escape(evidence_raw) if evidence_raw.strip() else "Based on overall profile"
+        rationale = html.escape(clean_text(row.rationale or ""))
+        cards.append(
+            f'<div style="background:white;border:1px solid #e5e7eb;border-radius:8px;padding:16px 20px;margin-bottom:12px;">'
+            f'<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">'
+            f'<div style="display:flex;align-items:center;gap:8px;">'
+            f'<span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:{color};flex-shrink:0;"></span>'
+            f'<span style="font-size:15px;font-weight:600;color:#111827;">{req}</span>'
+            f'</div>'
+            f'<span style="display:inline-block;padding:2px 10px;border-radius:999px;background:{bg};color:{color};font-size:12px;font-weight:600;white-space:nowrap;">{label}</span>'
+            f'</div>'
+            f'<div style="margin-bottom:8px;">'
+            f'<div style="font-size:12px;font-weight:600;color:#6b7280;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:4px;">Your evidence</div>'
+            f'<div style="font-size:14px;color:#374151;line-height:1.6;">{evidence}</div>'
+            f'</div>'
+            f'<div>'
+            f'<div style="font-size:12px;font-weight:600;color:#6b7280;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:4px;">Assessment</div>'
+            f'<div style="font-size:14px;color:#374151;line-height:1.6;">{rationale}</div>'
+            f'</div>'
+            f'</div>'
+        )
+    st.markdown("\n".join(cards), unsafe_allow_html=True)
 
 
 def _build_score_ring_svg(score: int | float, *, size: int = 120, stroke_width: int = 8) -> str:
@@ -423,37 +490,25 @@ def _render_results_hero(report: AnalysisReport) -> None:
             "</div>"
         )
 
-    st.markdown(
-        f"""
-        <div style="background:white;border:1px solid #e5e7eb;border-radius:12px;
-                    padding:32px;box-shadow:0 4px 6px -1px rgba(0,0,0,0.07);margin-bottom:32px;">
-          <div style="display:flex;align-items:center;gap:24px;flex-wrap:wrap;">
-            <div style="flex:0 0 180px;text-align:center;">
-              {_build_score_ring_svg(report.scorecard.total_score)}
-              <div style="font-family:JetBrains Mono, monospace;font-size:18px;font-weight:700;color:#111827;">
-                {score_value}/100
-              </div>
-              <div style="font-size:14px;font-weight:600;color:{score_color};margin-top:4px;">
-                {score_label}
-              </div>
-            </div>
-            <div style="flex:1 1 320px;min-width:260px;">
-              <div style="font-size:24px;font-weight:700;color:#111827;line-height:1.2;">
-                {job_title}
-              </div>
-              <div style="margin-top:6px;font-size:16px;color:#6b7280;">
-                at {company_name}
-              </div>
-              <div style="margin-top:18px;font-size:18px;font-weight:600;color:{recommendation_color};">
-                {recommendation_text}
-              </div>
-              {warning_html}
-            </div>
-          </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+    score_ring_svg = _build_score_ring_svg(report.scorecard.total_score).strip()
+    hero_parts = [
+        '<div style="background:white;border:1px solid #e5e7eb;border-radius:12px;padding:32px;box-shadow:0 4px 6px -1px rgba(0,0,0,0.07);margin-bottom:32px;">',
+        '<div style="display:flex;align-items:center;gap:24px;flex-wrap:wrap;">',
+        '<div style="flex:0 0 180px;text-align:center;">',
+        score_ring_svg,
+        f'<div style="font-family:JetBrains Mono, monospace;font-size:18px;font-weight:700;color:#111827;">{score_value}/100</div>',
+        f'<div style="font-size:14px;font-weight:600;color:{score_color};margin-top:4px;">{score_label}</div>',
+        '</div>',
+        '<div style="flex:1 1 320px;min-width:260px;">',
+        f'<div style="font-size:24px;font-weight:700;color:#111827;line-height:1.2;">{job_title}</div>',
+        f'<div style="margin-top:6px;font-size:16px;color:#6b7280;">at {company_name}</div>',
+        f'<div style="margin-top:18px;font-size:18px;font-weight:600;color:{recommendation_color};">{recommendation_text}</div>',
+        warning_html,
+        '</div>',
+        '</div>',
+        '</div>',
+    ]
+    st.markdown("\n".join(hero_parts), unsafe_allow_html=True)
 
 
 def render_copy_button(text: str, *, key: str) -> None:
@@ -489,30 +544,77 @@ def _render_recommendation_banner(report: AnalysisReport) -> None:
 def _update_progress_view(
     event: StageEvent,
     placeholder,
-    stage_views: dict[str, Any],
+    progress_state: dict[str, Any],
 ) -> None:
-    state_map = {
-        "running": "running",
-        "complete": "complete",
-        "warning": "complete",
-        "failed": "error",
-        "skipped": "complete",
-    }
-    label = f"{map_loading_step(event.stage_name)}: {clean_text(event.detail)}"
-
-    if event.stage_key not in stage_views:
-        stage_views[event.stage_key] = placeholder.status(
-            label,
-            state=state_map.get(event.status, "running"),
-            expanded=True,
-        )
+    loading_step = LOADING_STEP_BY_STAGE_KEY.get(event.stage_key)
+    if loading_step is None and event.stage_name in LOADING_STEP_ORDER:
+        loading_step = event.stage_name
+    if loading_step is None:
         return
 
-    stage_views[event.stage_key].update(
-        label=label,
-        state=state_map.get(event.status, "running"),
-        expanded=True,
-    )
+    step_index = LOADING_STEP_ORDER.index(loading_step)
+    completed_steps: set[str] = progress_state["completed_steps"]
+
+    for prior_step in LOADING_STEP_ORDER[:step_index]:
+        completed_steps.add(prior_step)
+
+    if event.status == "running":
+        progress_state["active_step"] = loading_step
+    elif event.status in {"complete", "warning", "skipped"}:
+        if event.stage_key in {"company", "materials"}:
+            progress_state["active_step"] = loading_step
+        else:
+            completed_steps.add(loading_step)
+            progress_state["active_step"] = _next_uncompleted_loading_step(completed_steps)
+    elif event.status == "failed":
+        progress_state["active_step"] = loading_step
+
+    _render_loading_progress(placeholder, progress_state)
+
+
+def _next_uncompleted_loading_step(completed_steps: set[str]) -> str | None:
+    for step in LOADING_STEP_ORDER:
+        if step not in completed_steps:
+            return step
+    return None
+
+
+def _render_loading_progress(placeholder, progress_state: dict[str, Any]) -> None:
+    completed_steps: set[str] = progress_state.get("completed_steps", set())
+    active_step = progress_state.get("active_step")
+
+    rows: list[str] = []
+    for step in LOADING_STEP_ORDER:
+        label = html.escape(map_loading_step(step))
+        if step in completed_steps:
+            rows.append(
+                f'<div style="display:flex;align-items:center;gap:10px;padding:6px 0;">'
+                f'<span style="color:#059669;font-weight:700;width:18px;text-align:center;">&#10003;</span>'
+                f'<span style="font-size:15px;color:#9ca3af;">{label}</span>'
+                f'</div>'
+            )
+        elif step == active_step:
+            rows.append(
+                f'<div style="display:flex;align-items:center;gap:10px;padding:6px 0;">'
+                f'<span style="color:#1a56db;font-weight:700;width:18px;text-align:center;">&#8226;</span>'
+                f'<span style="font-size:15px;color:#111827;font-weight:500;">{label}...</span>'
+                f'</div>'
+            )
+        else:
+            rows.append(
+                f'<div style="display:flex;align-items:center;gap:10px;padding:6px 0;">'
+                f'<span style="color:#d1d5db;width:18px;text-align:center;">&#9675;</span>'
+                f'<span style="font-size:15px;color:#d1d5db;">{label}</span>'
+                f'</div>'
+            )
+
+    parts = [
+        '<div style="max-width:480px;margin:48px auto;padding:28px 24px;background:white;border:1px solid #e5e7eb;border-radius:16px;box-shadow:0 10px 30px rgba(17,24,39,0.08);">',
+        '<div style="font-size:20px;font-weight:600;color:#111827;margin-bottom:16px;">Analyzing your match...</div>',
+        *rows,
+        '</div>',
+    ]
+    placeholder.markdown("\n".join(parts), unsafe_allow_html=True)
 
 
 def _init_state() -> None:
@@ -527,6 +629,8 @@ def _init_state() -> None:
     st.session_state.setdefault("cv_parse_failed", False)
     st.session_state.setdefault("manual_job_text", "")
     st.session_state.setdefault("manual_cv_text", "")
+    st.session_state.setdefault("pending_manual_job_text", "")
+    st.session_state.setdefault("pending_manual_cv_text", "")
 
 
 def _reset_flow() -> None:
@@ -541,6 +645,8 @@ def _reset_flow() -> None:
     st.session_state["cv_parse_failed"] = False
     st.session_state["manual_job_text"] = ""
     st.session_state["manual_cv_text"] = ""
+    st.session_state["pending_manual_job_text"] = ""
+    st.session_state["pending_manual_cv_text"] = ""
 
 
 def _render_inline_alert(message: str) -> None:
@@ -556,50 +662,19 @@ def _render_inline_alert(message: str) -> None:
 
 def _inject_styles() -> None:
     components.html(
-        """
-        <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
-        <style>
-        :root {
-          --color-primary: #1a56db;
-          --color-primary-hover: #1342a8;
-          --color-primary-light: #e8effc;
-          --color-strong: #059669;
-          --color-partial: #d97706;
-          --color-weak: #dc2626;
-          --color-bg: #fafafa;
-          --color-surface: #ffffff;
-          --color-border: #e5e7eb;
-          --color-text: #111827;
-          --color-text-secondary: #6b7280;
-          --color-text-muted: #9ca3af;
-        }
-
-        html, body, [class*="st-"] {
-          font-family: 'DM Sans', sans-serif !important;
-        }
-
-        #MainMenu, footer, header {
-          visibility: hidden;
-        }
-
-        .stApp {
-          background-color: var(--color-bg);
-        }
-
-        .stButton > button[kind="primary"] {
-          background-color: var(--color-primary);
-          border-radius: 6px;
-          font-weight: 500;
-          border: 1px solid var(--color-primary);
-        }
-
-        .stButton > button[kind="primary"]:hover {
-          background-color: var(--color-primary-hover);
-          border-color: var(--color-primary-hover);
-        }
-        </style>
-        """,
+        '<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700'
+        '&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">',
         height=0,
+    )
+    st.markdown(
+        '<style>'
+        '#MainMenu,footer,header{visibility:hidden}'
+        '.stApp{background-color:#fafafa}'
+        'html,body,.stApp{font-family:"DM Sans",sans-serif}'
+        '.stButton>button[kind="primary"]{background-color:#1a56db;border-radius:6px;font-weight:500;border:1px solid #1a56db}'
+        '.stButton>button[kind="primary"]:hover{background-color:#1342a8;border-color:#1342a8}'
+        '</style>',
+        unsafe_allow_html=True,
     )
 
 

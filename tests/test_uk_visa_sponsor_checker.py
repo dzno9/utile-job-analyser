@@ -122,6 +122,17 @@ class TestUKVisaSponsorChecker(unittest.TestCase):
         self.assertEqual(cleo.likelihood, VisaLikelihood.CONFIRMED_SPONSOR)
         self.assertEqual(meta.likelihood, VisaLikelihood.CONFIRMED_SPONSOR)
 
+    def test_single_token_brand_does_not_false_match_related_entity(self) -> None:
+        csv_text = (
+            "Organisation Name,Town/City\n"
+            "Bumble Hole Foods Ltd,Dudley\n"
+        )
+        checker, _ = self._build_checker(csv_text=csv_text, search_tool=FakeSearchTool())
+        assessment = checker.assess(job_context=self._job("Bumble Inc"))
+        # "Bumble" alone must NOT match "Bumble Hole Foods Ltd" via related entity.
+        self.assertNotEqual(assessment.likelihood, VisaLikelihood.CONFIRMED_SPONSOR)
+        self.assertNotIn(VisaEvidenceTag.RELATED_ENTITY_MATCH, assessment.evidence_tags)
+
     def test_register_cache_is_reused_and_refreshed_weekly(self) -> None:
         source = FakeGovUkRegisterSource(csv_text=self.csv_text)
         temp_dir = tempfile.TemporaryDirectory()

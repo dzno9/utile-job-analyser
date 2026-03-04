@@ -83,7 +83,7 @@ class TestModels(unittest.TestCase):
 
         scorecard = Scorecard(
             rows=rows,
-            total_score=60,
+            total_score=70,
             recommendation=Recommendation.CONFIDENT_APPLY,
             pipeline_should_continue=True,
             risk_flags=[],
@@ -127,7 +127,10 @@ class TestModels(unittest.TestCase):
             recommendation_from_score(35), Recommendation.APPLY_WITH_CAVEATS
         )
         self.assertEqual(
-            recommendation_from_score(56), Recommendation.CONFIDENT_APPLY
+            recommendation_from_score(56), Recommendation.APPLY_WITH_CAVEATS
+        )
+        self.assertEqual(
+            recommendation_from_score(65), Recommendation.CONFIDENT_APPLY
         )
 
     def test_invalid_match_strength_rejected(self) -> None:

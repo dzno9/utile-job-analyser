@@ -228,6 +228,8 @@ class UKVisaSponsorChecker:
             return best_entry
 
         # Handle brand-vs-legal variants like "Cleo" vs "Cleo AI Ltd".
+        # Require the longer side to have at most 2 canonical tokens to avoid
+        # false positives (e.g. "Bumble" should NOT match "Bumble Hole Foods").
         left = _canonical_name(company_name)
         right = _canonical_name(best_entry.organisation_name)
         left_tokens = left.split()
@@ -237,6 +239,7 @@ class UKVisaSponsorChecker:
             and right
             and (left in right or right in left)
             and (len(left_tokens) == 1 or len(right_tokens) == 1)
+            and max(len(left_tokens), len(right_tokens)) <= 2
         ):
             return best_entry
         return None
@@ -248,7 +251,9 @@ class UKVisaSponsorChecker:
         entries: list[SponsorRegisterEntry],
     ) -> SponsorRegisterEntry | None:
         anchor_tokens = _anchor_tokens(company_name)
-        if not anchor_tokens:
+        # Require at least 2 anchor tokens to avoid false positives on
+        # single-word brand names (e.g. "Bumble" matching "Bumble Hole Foods").
+        if len(anchor_tokens) < 2:
             return None
 
         best_entry: SponsorRegisterEntry | None = None

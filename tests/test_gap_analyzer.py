@@ -98,7 +98,7 @@ class TestGapAnalyzerDecisionGate(unittest.TestCase):
             candidate_notes=self.candidate_notes,
         )
 
-        self.assertGreater(result.scorecard.total_score, 55)
+        self.assertGreaterEqual(result.scorecard.total_score, 65)
         self.assertEqual(result.recommendation, Recommendation.CONFIDENT_APPLY)
         self.assertTrue(result.should_continue_pipeline)
 

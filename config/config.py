@@ -10,7 +10,8 @@ try:
     from dotenv import load_dotenv  # type: ignore
 
     _env_path = Path(__file__).resolve().parent.parent / ".env"
-    load_dotenv(_env_path, override=True)
+    # Shell-exported variables should win over .env values.
+    load_dotenv(_env_path, override=False)
 except ImportError:
     pass
 

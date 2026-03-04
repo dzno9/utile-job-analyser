@@ -11,12 +11,24 @@ class RerunSignal(RuntimeError):
     pass
 
 
+class FakePlaceholder:
+    def __init__(self) -> None:
+        self.markdowns: list[str] = []
+
+    def markdown(self, text: str, **kwargs) -> None:  # noqa: ANN003
+        del kwargs
+        self.markdowns.append(text)
+
+
 class FakeStreamlit:
     def __init__(self, session_state: dict) -> None:
         self.session_state = session_state
+        self.placeholders: list[FakePlaceholder] = []
 
-    def container(self):
-        return object()
+    def empty(self):
+        placeholder = FakePlaceholder()
+        self.placeholders.append(placeholder)
+        return placeholder
 
     def rerun(self) -> None:
         raise RerunSignal()
@@ -44,6 +56,8 @@ class TestAppFlow(unittest.TestCase):
             "cv_parse_failed": False,
             "manual_job_text": "",
             "manual_cv_text": "",
+            "pending_manual_job_text": "",
+            "pending_manual_cv_text": "",
         }
 
     def test_execute_pipeline_reroutes_to_inline_job_text_on_scrape_failure(self) -> None:
@@ -92,7 +106,34 @@ class TestAppFlow(unittest.TestCase):
         self.assertFalse(fake_st.session_state["cv_parse_failed"])
         self.assertEqual(fake_st.session_state["manual_job_text"], "Manual job")
         self.assertEqual(fake_st.session_state["manual_cv_text"], "Manual CV")
+        self.assertEqual(fake_st.session_state["pending_manual_job_text"], "")
+        self.assertEqual(fake_st.session_state["pending_manual_cv_text"], "")
         self.assertEqual(fake_st.session_state["current_view"], app.VIEW_RESULTS)
+
+    def test_render_loading_page_uses_pending_manual_inputs(self) -> None:
+        fake_st = FakeStreamlit(self._base_state())
+        fake_st.session_state["pending_manual_job_text"] = "Pasted job"
+        fake_st.session_state["pending_manual_cv_text"] = "Pasted cv"
+        with (
+            mock.patch.object(app, "st", fake_st),
+            mock.patch.object(app, "_execute_pipeline") as execute_pipeline,
+        ):
+            app._render_loading_page()
+
+        execute_pipeline.assert_called_once_with(
+            manual_job_posting_text="Pasted job",
+            manual_cv_text="Pasted cv",
+        )
+
+    def test_render_loading_page_returns_to_input_when_required_inputs_missing(self) -> None:
+        fake_st = FakeStreamlit(self._base_state())
+        fake_st.session_state["cv_bytes"] = b""
+        fake_st.session_state["current_view"] = app.VIEW_LOADING
+        with mock.patch.object(app, "st", fake_st):
+            with self.assertRaises(RerunSignal):
+                app._render_loading_page()
+
+        self.assertEqual(fake_st.session_state["current_view"], app.VIEW_INPUT)
 
 
 if __name__ == "__main__":

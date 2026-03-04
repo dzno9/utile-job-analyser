@@ -111,7 +111,7 @@ class Scorecard(BaseModel):
         if self.recommendation != expected:
             msg = (
                 "recommendation does not match total_score thresholds: "
-                "<35 => DoNotApply, 35-55 => ApplyWithCaveats, >55 => ConfidentApply"
+                "<35 => DoNotApply, 35-64 => ApplyWithCaveats, >=65 => ConfidentApply"
             )
             raise ValueError(msg)
         expected_continue = self.recommendation != Recommendation.DO_NOT_APPLY
@@ -164,6 +164,6 @@ class AnalysisReport(BaseModel):
 def recommendation_from_score(score: float) -> Recommendation:
     if score < 35:
         return Recommendation.DO_NOT_APPLY
-    if score <= 55:
+    if score < 65:
         return Recommendation.APPLY_WITH_CAVEATS
     return Recommendation.CONFIDENT_APPLY
