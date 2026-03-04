@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import html
+import math
 import os
 import tempfile
 from pathlib import Path
@@ -186,19 +187,7 @@ def _render_results_page() -> None:
         return
 
     if result.report is not None:
-        recommendation = map_recommendation(result.report.recommendation)
-        score_style = score_tier(result.report.scorecard.total_score)
-        st.subheader("Analysis Summary")
-        st.markdown(
-            f"<span style='display:inline-block;padding:6px 12px;border-radius:999px;background:{score_style['color']};"
-            "color:white;font-weight:600;'>"
-            f"Role-match score: {result.report.scorecard.total_score:.0f}/100 ({score_style['label']})</span>",
-            unsafe_allow_html=True,
-        )
-        st.write(f"Recommendation: **{recommendation['label']}**")
-        if recommendation["description"]:
-            st.caption(recommendation["description"])
-
+        _render_results_hero(result.report)
         render_report(
             result.report,
             warnings=result.warnings,
@@ -379,6 +368,92 @@ def render_report(
         with st.expander("Data Quality Notes", expanded=False):
             for warning in warnings:
                 st.warning(humanize_warning(warning))
+
+
+def _build_score_ring_svg(score: int | float, *, size: int = 120, stroke_width: int = 8) -> str:
+    tier = score_tier(score)
+    color = tier["color"]
+    label = html.escape(tier["label"])
+    clamped_score = max(0.0, min(100.0, float(score)))
+    rounded_score = int(round(clamped_score))
+
+    radius = (size - stroke_width) / 2
+    circumference = 2 * math.pi * radius
+    offset = circumference * (1 - clamped_score / 100)
+
+    return f"""
+    <svg width="{size}" height="{size}" viewBox="0 0 {size} {size}">
+      <circle cx="{size / 2}" cy="{size / 2}" r="{radius}"
+              fill="none" stroke="#e5e7eb" stroke-width="{stroke_width}"/>
+      <circle cx="{size / 2}" cy="{size / 2}" r="{radius}"
+              fill="none" stroke="{color}" stroke-width="{stroke_width}"
+              stroke-dasharray="{circumference:.2f}"
+              stroke-dashoffset="{offset:.2f}"
+              stroke-linecap="round"
+              transform="rotate(-90 {size / 2} {size / 2})"/>
+      <text x="50%" y="48%" text-anchor="middle" dominant-baseline="middle"
+            font-family="JetBrains Mono, monospace" font-size="32" font-weight="700"
+            fill="#111827">{rounded_score}</text>
+      <text x="50%" y="68%" text-anchor="middle" dominant-baseline="middle"
+            font-family="DM Sans, sans-serif" font-size="11" fill="{color}" font-weight="600">{label}</text>
+    </svg>
+    """
+
+
+def _render_results_hero(report: AnalysisReport) -> None:
+    recommendation = map_recommendation(report.recommendation)
+    recommendation_color = recommendation["color"]
+    recommendation_text = html.escape(
+        clean_text(recommendation["description"] or recommendation["label"])
+    )
+    score_style = score_tier(report.scorecard.total_score)
+    score_label = html.escape(score_style["label"])
+    score_color = score_style["color"]
+    score_value = int(round(max(0.0, min(100.0, float(report.scorecard.total_score)))))
+    job_title = html.escape(clean_text(report.job_context.job_title))
+    company_name = html.escape(clean_text(report.job_context.company_name))
+
+    warning_count = len(report.scorecard.risk_flags)
+    warning_html = ""
+    if warning_count > 0:
+        noun = "item" if warning_count == 1 else "items"
+        warning_html = (
+            '<div style="margin-top:16px;font-size:16px;font-weight:600;color:#b45309;">'
+            f"&#9888; {warning_count} {noun} need attention"
+            "</div>"
+        )
+
+    st.markdown(
+        f"""
+        <div style="background:white;border:1px solid #e5e7eb;border-radius:12px;
+                    padding:32px;box-shadow:0 4px 6px -1px rgba(0,0,0,0.07);margin-bottom:32px;">
+          <div style="display:flex;align-items:center;gap:24px;flex-wrap:wrap;">
+            <div style="flex:0 0 180px;text-align:center;">
+              {_build_score_ring_svg(report.scorecard.total_score)}
+              <div style="font-family:JetBrains Mono, monospace;font-size:18px;font-weight:700;color:#111827;">
+                {score_value}/100
+              </div>
+              <div style="font-size:14px;font-weight:600;color:{score_color};margin-top:4px;">
+                {score_label}
+              </div>
+            </div>
+            <div style="flex:1 1 320px;min-width:260px;">
+              <div style="font-size:24px;font-weight:700;color:#111827;line-height:1.2;">
+                {job_title}
+              </div>
+              <div style="margin-top:6px;font-size:16px;color:#6b7280;">
+                at {company_name}
+              </div>
+              <div style="margin-top:18px;font-size:18px;font-weight:600;color:{recommendation_color};">
+                {recommendation_text}
+              </div>
+              {warning_html}
+            </div>
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
 
 def render_copy_button(text: str, *, key: str) -> None:

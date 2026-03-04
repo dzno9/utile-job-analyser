@@ -142,6 +142,29 @@ def _sample_report() -> AnalysisReport:
 
 
 class TestAppDisplayWiring(unittest.TestCase):
+    def test_build_score_ring_svg_uses_score_tier_color(self) -> None:
+        svg = app._build_score_ring_svg(50, size=120, stroke_width=8)
+
+        self.assertIn('stroke="#d97706"', svg)
+        self.assertIn("stroke-dasharray", svg)
+        self.assertIn(">50<", svg)
+        self.assertIn(">Partial Match<", svg)
+
+    def test_render_results_hero_includes_recommendation_and_warning_count(self) -> None:
+        fake_st = _FakeStreamlit()
+        report = _sample_report()
+        report.scorecard.risk_flags = ["Missing API ownership examples", "Needs domain depth"]
+
+        with mock.patch.object(app, "st", fake_st):
+            app._render_results_hero(report)
+
+        hero_html = "\n".join(fake_st.markdowns)
+        self.assertIn("Data Analyst", hero_html)
+        self.assertIn("at Acme", hero_html)
+        self.assertIn("Worth Applying - Review Caveats First", hero_html)
+        self.assertIn("2 items need attention", hero_html)
+        self.assertIn("50/100", hero_html)
+
     def test_render_report_uses_display_cleaners(self) -> None:
         fake_st = _FakeStreamlit()
         with (
