@@ -1,0 +1,186 @@
+from __future__ import annotations
+
+import unittest
+from datetime import datetime
+from unittest import mock
+
+import app
+from models import (
+    AnalysisReport,
+    CompanyBrief,
+    CoverLetter,
+    JobContext,
+    MatchStrength,
+    Recommendation,
+    ScoreRow,
+    Scorecard,
+    VisaAssessment,
+    VisaEvidenceTag,
+    VisaLikelihood,
+)
+from stages.ui_orchestrator import StageEvent
+
+
+class _DummyContext:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):  # noqa: ANN001
+        del exc_type, exc, tb
+        return False
+
+
+class _FakeStatusHandle:
+    def __init__(self) -> None:
+        self.updates: list[dict] = []
+
+    def update(self, **kwargs) -> None:  # noqa: ANN003
+        self.updates.append(kwargs)
+
+
+class _FakePlaceholder:
+    def __init__(self) -> None:
+        self.labels: list[str] = []
+        self.handle = _FakeStatusHandle()
+
+    def status(self, label: str, state: str, expanded: bool):  # noqa: ANN001
+        self.labels.append(label)
+        self.handle.updates.append({"state": state, "expanded": expanded})
+        return self.handle
+
+
+class _FakeStreamlit:
+    def __init__(self) -> None:
+        self.markdowns: list[str] = []
+        self.dataframes = []
+        self.warnings: list[str] = []
+        self.expander_labels: list[str] = []
+
+    def tabs(self, labels):  # noqa: ANN001
+        return [_DummyContext() for _ in labels]
+
+    def metric(self, *args, **kwargs):  # noqa: ANN001, ANN002
+        del args, kwargs
+
+    def dataframe(self, df, **kwargs):  # noqa: ANN001
+        del kwargs
+        self.dataframes.append(df)
+
+    def markdown(self, text: str, **kwargs):  # noqa: ANN003
+        del kwargs
+        self.markdowns.append(text)
+
+    def expander(self, label: str, **kwargs):  # noqa: ANN003
+        del kwargs
+        self.expander_labels.append(label)
+        return _DummyContext()
+
+    def warning(self, text: str) -> None:
+        self.warnings.append(text)
+
+    def info(self, text: str) -> None:
+        self.markdowns.append(text)
+
+    def write(self, text: str) -> None:
+        self.markdowns.append(text)
+
+    def caption(self, text: str) -> None:
+        self.markdowns.append(text)
+
+
+def _sample_report() -> AnalysisReport:
+    return AnalysisReport(
+        job_context=JobContext(
+            job_id="job-1",
+            job_title="Data Analyst",
+            company_name="Acme",
+            location="London",
+            job_url="https://jobs.example.com/acme/data-analyst",
+            posting_text="Analyze data and ship insights.",
+            requirements=["SQL"],
+            required_skills=["SQL"],
+        ),
+        company_brief=CompanyBrief(
+            company_name="Acme",
+            summary="Acme is growing quickly.",
+            industry="SaaS",
+            sources=["https://example.com/company"],
+        ),
+        research_findings=[],
+        visa_assessment=VisaAssessment(
+            likelihood=VisaLikelihood.LIKELY,
+            evidence_tags=[VisaEvidenceTag.SPONSORED_ROLE_SIGNAL],
+            reasoning="Signals suggest sponsorship is possible.",
+            evidence=["https://example.com/visa"],
+        ),
+        scorecard=Scorecard(
+            rows=[
+                ScoreRow(
+                    requirement_from_job_post="SQL",
+                    matching_experience="[fallback] Dika Satria +44-7824-711960 | dzno9a@gmail",
+                    rationale="[fallback] Built analytics pipelines | with strong ownership",
+                    match_strength=MatchStrength.PARTIAL,
+                )
+            ],
+            total_score=50,
+            recommendation=Recommendation.APPLY_WITH_CAVEATS,
+            pipeline_should_continue=True,
+            risk_flags=[],
+        ),
+        cover_letter=CoverLetter(
+            candidate_name="Dika",
+            company_name="Acme",
+            job_title="Data Analyst",
+            draft_markdown="[fallback] Dear team, I can contribute immediately. +44-7824-711960",
+            emphasis_strategy=["[fallback] Focus on SQL outcomes"],
+        ),
+        cv_tweaks=["Add measurable impact"],
+        summary="Recommendation: ApplyWithCaveats.",
+        recommendation=Recommendation.APPLY_WITH_CAVEATS,
+        generated_at=datetime.utcnow(),
+    )
+
+
+class TestAppDisplayWiring(unittest.TestCase):
+    def test_render_report_uses_display_cleaners(self) -> None:
+        fake_st = _FakeStreamlit()
+        with (
+            mock.patch.object(app, "st", fake_st),
+            mock.patch.object(app, "render_copy_button"),
+        ):
+            app.render_report(
+                _sample_report(),
+                warnings=["Scrape: Computed confidence=0.75"],
+                cover_letter_generated=True,
+                show_recommendation_banner=True,
+            )
+
+        frame = fake_st.dataframes[0]
+        self.assertEqual(frame.iloc[0]["Evidence"], "Dika Satria")
+        self.assertEqual(frame.iloc[0]["Rationale"], "Built analytics pipelines with strong ownership")
+        self.assertIn("Data Quality Notes", fake_st.expander_labels)
+        self.assertIn(
+            "Job posting scraped with 75% confidence - some details may be approximate",
+            fake_st.warnings,
+        )
+        banner_html = "\n".join(fake_st.markdowns)
+        self.assertIn("Conditional Match", banner_html)
+        self.assertNotIn("ApplyWithCaveats", banner_html)
+
+    def test_update_progress_view_maps_loading_step(self) -> None:
+        placeholder = _FakePlaceholder()
+        stage_views = {}
+        event = StageEvent(
+            stage_key="scrape",
+            stage_name="Job Scrape",
+            status="running",
+            detail="[fallback] Scraping job URL",
+        )
+
+        app._update_progress_view(event, placeholder, stage_views)
+
+        self.assertIn("Reading job requirements: Scraping job URL", placeholder.labels)
+
+
+if __name__ == "__main__":
+    unittest.main()
