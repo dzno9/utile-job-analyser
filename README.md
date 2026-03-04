@@ -57,8 +57,8 @@ Each stage is independently testable. Data flows through **Pydantic models** tha
 
 ```bash
 # Clone and enter
-git clone https://github.com/andikasatria/utile.git
-cd utile
+git clone https://github.com/dzno9/utile-job-analyser.git
+cd utile-job-analyser
 
 # Set up Python environment
 python3.11 -m venv .venv
